@@ -1,0 +1,181 @@
+import pty from '@homebridge/node-pty-prebuilt-multiarch';
+import { randomUUID } from 'node:crypto';
+import { createWriteStream, mkdirSync, existsSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
+import { homedir } from 'node:os';
+
+const RING_MAX = 2000;
+
+// 只把無關 secret 的環境變數傳給 PTY 子進程；避免 SESSION_SECRET / GOOGLE_CLIENT_ID
+// 等被 spawn 出來的 shell 看見或寫進 session log。
+const SAFE_ENV_KEYS = [
+  'HOME', 'PATH', 'USER', 'LOGNAME', 'SHELL',
+  'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ',
+  'TERM_PROGRAM', 'TERM_PROGRAM_VERSION',
+  'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+  'TMPDIR',
+];
+
+// 阻擋 user-supplied profile.env 注入危險 key
+const BLOCKED_ENV_PREFIX = ['LD_', 'DYLD_', 'NODE_OPTIONS'];
+const BLOCKED_ENV_EXACT = new Set(['PATH', 'NODE_PATH']);
+
+function sanitizeProfileEnv(envObj) {
+  if (!envObj || typeof envObj !== 'object') return {};
+  const out = {};
+  for (const [k, v] of Object.entries(envObj)) {
+    if (BLOCKED_ENV_EXACT.has(k)) continue;
+    if (BLOCKED_ENV_PREFIX.some(p => k.startsWith(p))) continue;
+    if (typeof v === 'string') out[k] = v;
+  }
+  return out;
+}
+
+function expandHome(p) {
+  if (!p) return p;
+  if (p.startsWith('~')) return resolve(homedir(), p.slice(1).replace(/^\//, ''));
+  return p;
+}
+
+export class TerminalManager {
+  constructor({ profiles, logDir, shell = process.env.SHELL || '/bin/zsh' }) {
+    this.profiles = profiles;
+    this.logDir = resolve(logDir);
+    this.shell = shell;
+    this.sessions = new Map();
+    mkdirSync(this.logDir, { recursive: true });
+
+    const cleanup = () => this.killAll();
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+    process.on('exit', cleanup);
+  }
+
+  list() {
+    return [...this.sessions.values()].map(s => this._toJson(s));
+  }
+
+  get(id) {
+    const s = this.sessions.get(id);
+    return s ? this._toJson(s) : null;
+  }
+
+  logTail(id, lines = 200) {
+    const s = this.sessions.get(id);
+    if (!s) return null;
+    const buf = s.output_ring;
+    return buf.slice(Math.max(0, buf.length - lines)).join('');
+  }
+
+  async spawn({ profile_id }) {
+    const profile = this.profiles.get(profile_id);
+    if (!profile) {
+      const err = new Error(`launch profile not found: ${profile_id}`);
+      err.status = 404;
+      throw err;
+    }
+
+    const id = randomUUID();
+    const cwd = expandHome(profile.cwd);
+    if (!existsSync(cwd)) {
+      const err = new Error(`cwd does not exist: ${cwd}`);
+      err.status = 422;
+      throw err;
+    }
+
+    const logPath = join(this.logDir, `${id}.log`);
+    const logStream = createWriteStream(logPath, { flags: 'a' });
+
+    const safeEnv = Object.fromEntries(
+      SAFE_ENV_KEYS
+        .map(k => [k, process.env[k]])
+        .filter(([, v]) => typeof v === 'string')
+    );
+    const env = {
+      ...safeEnv,
+      ...sanitizeProfileEnv(profile.env),
+      CODD_TERMINAL_ID: id,
+      TERM: 'xterm-256color',
+    };
+
+    const ptyProcess = pty.spawn(
+      this.shell,
+      ['-i', '-c', profile.command],
+      { name: 'xterm-256color', cols: 120, rows: 30, cwd, env }
+    );
+
+    const record = {
+      id,
+      profile_id: profile.id,
+      profile_name: profile.name,
+      command: profile.command,
+      cwd,
+      pid: ptyProcess.pid,
+      status: 'running',
+      started_at: new Date().toISOString(),
+      exited_at: null,
+      exit_code: null,
+      restart_count: 0,
+      log_path: logPath,
+      output_ring: [],
+      _pty: ptyProcess,
+      _logStream: logStream,
+    };
+
+    ptyProcess.onData(data => {
+      logStream.write(data);
+      record.output_ring.push(data);
+      if (record.output_ring.length > RING_MAX) {
+        record.output_ring.splice(0, record.output_ring.length - RING_MAX);
+      }
+    });
+
+    ptyProcess.onExit(({ exitCode, signal }) => {
+      record.status = 'exited';
+      record.exited_at = new Date().toISOString();
+      record.exit_code = signal ? `signal:${signal}` : exitCode;
+      record._pty = null;
+      try { logStream.end(); } catch {}
+    });
+
+    this.sessions.set(id, record);
+    return this._toJson(record);
+  }
+
+  async kill(id) {
+    const s = this.sessions.get(id);
+    if (!s) return null;
+    if (s.status !== 'running' || !s._pty) return this._toJson(s);
+    try { s._pty.kill('SIGTERM'); } catch {}
+    setTimeout(() => {
+      const cur = this.sessions.get(id);
+      if (cur?.status === 'running' && cur._pty) {
+        try { cur._pty.kill('SIGKILL'); } catch {}
+      }
+    }, 5000);
+    return this._toJson(s);
+  }
+
+  async restart(id) {
+    const s = this.sessions.get(id);
+    if (!s) return null;
+    if (s.status === 'running') await this.kill(id);
+    const fresh = await this.spawn({ profile_id: s.profile_id });
+    const freshRec = this.sessions.get(fresh.id);
+    freshRec.restart_count = (s.restart_count || 0) + 1;
+    return this._toJson(freshRec);
+  }
+
+  killAll() {
+    for (const s of this.sessions.values()) {
+      if (s.status === 'running' && s._pty) {
+        try { s._pty.kill('SIGTERM'); } catch {}
+      }
+    }
+  }
+
+  _toJson(s) {
+    const { _pty, _logStream, output_ring, ...rest } = s;
+    return { ...rest, output_lines: output_ring.length };
+  }
+}

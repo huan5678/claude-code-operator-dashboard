@@ -1,0 +1,27 @@
+# Cloudflare named tunnel 設定範例
+#
+# 前置：
+# 1. cloudflared tunnel login   （拿 cert.pem）
+# 2. cloudflared tunnel create codd-manager
+#    → 會給你一組 UUID 跟一個 credentials JSON
+# 3. cloudflared tunnel route dns codd-manager codd.example.com
+# 4. 把這個檔案複製成 configs/cloudflared.yml 並改值
+# 5. 啟動：cloudflared tunnel --config configs/cloudflared.yml run
+#
+# ⚠️ 安全提醒 — 啟用 tunnel 等於把後端 admin UI（含 PTY spawn API）暴露到 internet。
+# 唯一防線是 Google ID Token allowlist，不夠。請務必加上：
+#
+# 1. Cloudflare Zero Trust → Access policy（5 分鐘設定）
+#    完整步驟見 configs/cloudflare-access-setup.md
+#    這層在 Cloudflare edge 擋掉所有非 allowlist 流量，後端服務根本不會被打到。
+#
+# 2. 後端 server 已綁定 127.0.0.1（HOST 環境變數可改），不對 LAN 暴露。
+#    若想對 LAN 開放（不建議），需把 HOST=0.0.0.0 並自行承擔風險。
+
+tunnel: <YOUR-TUNNEL-UUID>
+credentials-file: /Users/<your-user>/.cloudflared/<YOUR-TUNNEL-UUID>.json
+
+ingress:
+  - hostname: codd.example.com
+    service: http://localhost:3000
+  - service: http_status:404

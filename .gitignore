@@ -1,0 +1,45 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+
+apps/server/data/
+apps/server/data/sessions/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+
+apps/web/dist/
+.vite/
+
+.DS_Store
+*.log
+npm-debug.log*
+.cache/
+
+# Cloudflare tunnel 實檔（範例請看 cloudflared.yml.example）
+configs/cloudflared.yml
+configs/*.json
+
+# 密鑰 / 憑證
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+
+# IDE / 編輯器 / build 殘留
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tsbuildinfo
+.eslintcache
+coverage/
+*.lcov
+
+# 不要把 reference channel 進來
+2026-local-AI-Agent/
