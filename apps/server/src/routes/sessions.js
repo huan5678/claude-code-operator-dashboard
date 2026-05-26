@@ -40,6 +40,14 @@ export function sessionsRouter(terminal) {
     res.setHeader('X-Accel-Buffering', 'no'); // 防 nginx / proxy buffer
     res.flushHeaders?.();
 
+    // 對 SSE socket 個別取消 idle timeout。
+    // 全域 server.keepAliveTimeout=1000 是給普通 HTTP 用（讓 port 不卡 TIME_WAIT），
+    // 但 SSE 是 long-lived「server 持續 push、client 不發新 request」連線，
+    // 1 秒後 Node 會誤判成 idle 砍 socket → SSE 完全收不到 data。
+    req.socket?.setTimeout(0);
+    req.socket?.setKeepAlive(true);
+    req.socket?.setNoDelay(true);
+
     function sendData(raw) {
       // base64 encode 避免 PTY raw bytes 內的 \n \r 破壞 SSE 行格式
       const b64 = Buffer.from(raw, 'binary').toString('base64');

@@ -67,8 +67,17 @@ async function restart() {
 }
 
 async function openDesktop() {
+  const takeover = confirm(
+    '在桌面開啟 Terminal.app 後，是否同時終止 web session？\n\n' +
+    '[ 確定 ] = 接管：桌面 Terminal 跑、kill 掉 web session、跳回列表\n' +
+    '[ 取消 ] = 保留：兩邊都跑（背景同進程繼續、桌面也有一個）'
+  );
   try {
     await api.openSessionDesktop(props.id);
+    if (takeover) {
+      try { await api.killSession(props.id); } catch {}
+      router.push('/sessions');
+    }
   } catch (e) {
     alert(e.message || 'open desktop failed');
   }
