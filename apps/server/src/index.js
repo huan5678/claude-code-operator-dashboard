@@ -128,33 +128,43 @@ server.keepAliveTimeout = 1000;
 server.headersTimeout = 2000;
 
 let shuttingDown = false;
-function shutdown(signal) {
+async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[codd-server] ${signal} received, shutting down…`);
 
-  // 1. 殺所有 PTY 子進程（terminal-manager 本身也有 SIGINT handler；雙保險）
-  try { terminal.killAll(); } catch {}
-
-  // 2. 關閉 HTTP server 不再接新連線，並強制斷現有 keep-alive
-  server.close(() => {
-    try { db.close(); } catch {}
-    console.log('[codd-server] closed cleanly');
-    process.exit(0);
-  });
-  if (typeof server.closeAllConnections === 'function') {
-    server.closeAllConnections();
-  }
-
-  // 3. 5 秒後強制退出，防止任何 hang 住的 socket / handle
+  // 0. Hard timeout 兜底：12s（足以涵蓋 PTY SIGTERM 5s + SIGKILL 2s + 緩衝）
   setTimeout(() => {
     console.error('[codd-server] forced exit (shutdown timeout)');
     process.exit(1);
-  }, 5000).unref();
+  }, 12000).unref();
+
+  // 1. HTTP server：停接新連線、強制斷現有 keep-alive；同時 await 真的關閉
+  if (typeof server.closeAllConnections === 'function') {
+    server.closeAllConnections();
+  }
+  const httpClosed = new Promise(r => server.close(() => r()));
+
+  // 2. PTY：SIGTERM → 5s graceful → SIGKILL → 2s reap，await 全部死乾淨
+  let killErr;
+  try {
+    await terminal.killAll();
+    console.log('[codd-server] all PTY children terminated');
+  } catch (e) {
+    killErr = e;
+  }
+
+  // 3. 等 HTTP 完全關掉再關 DB（PTY 在 onExit 會 logStream.end()，先讓它寫完）
+  await httpClosed;
+  try { db.close(); } catch {}
+
+  if (killErr) console.error('[codd-server] killAll error', killErr);
+  console.log('[codd-server] closed cleanly');
+  process.exit(0);
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGHUP', () => shutdown('SIGHUP'));
+process.on('SIGINT', () => { shutdown('SIGINT'); });
+process.on('SIGTERM', () => { shutdown('SIGTERM'); });
+process.on('SIGHUP', () => { shutdown('SIGHUP'); });
 
 export { db, reader, repo, authGate };

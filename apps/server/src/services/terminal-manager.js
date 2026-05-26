@@ -7,6 +7,10 @@ import { EventEmitter } from 'node:events';
 
 const RING_MAX = 2000;
 
+// 兩階段強制終止：SIGTERM → 等 5s → SIGKILL → 再等 2s 收尾
+const KILL_TERM_TIMEOUT_MS = 5000;
+const KILL_FORCE_TIMEOUT_MS = 2000;
+
 // 只把無關 secret 的環境變數傳給 PTY 子進程；避免 SESSION_SECRET / GOOGLE_CLIENT_ID
 // 等被 spawn 出來的 shell 看見或寫進 session log。
 const SAFE_ENV_KEYS = [
@@ -46,10 +50,16 @@ export class TerminalManager {
     this.sessions = new Map();
     mkdirSync(this.logDir, { recursive: true });
 
-    const cleanup = () => this.killAll();
-    process.on('SIGINT', cleanup);
-    process.on('SIGTERM', cleanup);
-    process.on('exit', cleanup);
+    // 同步保險：process 'exit' 是同步事件，event loop 已停，無法 await。
+    // 這裡只是「人都要走了還是禮貌敲一下」，讓還活著的 PTY 收到 SIGTERM。
+    // 真正等子進程死乾淨的邏輯在 index.js 的 shutdown() 裡 await killAll()。
+    process.on('exit', () => {
+      for (const s of this.sessions.values()) {
+        if (s.status === 'running' && s._pty) {
+          try { s._pty.kill('SIGTERM'); } catch {}
+        }
+      }
+    });
   }
 
   list() {
@@ -108,6 +118,10 @@ export class TerminalManager {
     const emitter = new EventEmitter();
     emitter.setMaxListeners(50); // 允許多個 SSE client 同時訂閱
 
+    // 讓 kill() 可以 await PTY 真的死掉
+    let resolveExit;
+    const exitPromise = new Promise(r => { resolveExit = r; });
+
     const record = {
       id,
       profile_id: profile.id,
@@ -125,6 +139,8 @@ export class TerminalManager {
       _pty: ptyProcess,
       _logStream: logStream,
       _emitter: emitter,
+      _exitPromise: exitPromise,
+      _killing: false,
     };
 
     ptyProcess.onData(data => {
@@ -143,6 +159,7 @@ export class TerminalManager {
       record._pty = null;
       try { logStream.end(); } catch {}
       emitter.emit('exit', { exitCode, signal });
+      resolveExit({ exitCode, signal });
     });
 
     this.sessions.set(id, record);
@@ -153,14 +170,28 @@ export class TerminalManager {
     const s = this.sessions.get(id);
     if (!s) return null;
     if (s.status !== 'running' || !s._pty) return this._toJson(s);
-    try { s._pty.kill('SIGTERM'); } catch {}
-    setTimeout(() => {
-      const cur = this.sessions.get(id);
-      if (cur?.status === 'running' && cur._pty) {
-        try { cur._pty.kill('SIGKILL'); } catch {}
-      }
-    }, 5000);
+
+    // 已經在收尾就接著等同一個 exitPromise，不要重發訊號
+    if (!s._killing) {
+      s._killing = true;
+      try { s._pty.kill('SIGTERM'); } catch {}
+    }
+
+    // 階段 1：等 graceful exit
+    await this._waitExitOrTimeout(s, KILL_TERM_TIMEOUT_MS);
+
+    // 階段 2：還活著就升級成 SIGKILL，再給一點時間讓 kernel reap
+    if (s.status === 'running' && s._pty) {
+      try { s._pty.kill('SIGKILL'); } catch {}
+      await this._waitExitOrTimeout(s, KILL_FORCE_TIMEOUT_MS);
+    }
     return this._toJson(s);
+  }
+
+  _waitExitOrTimeout(s, ms) {
+    let to;
+    const timer = new Promise(r => { to = setTimeout(r, ms); });
+    return Promise.race([s._exitPromise, timer]).finally(() => clearTimeout(to));
   }
 
   async restart(id) {
@@ -195,12 +226,15 @@ export class TerminalManager {
     return s.output_ring.join('');
   }
 
-  killAll() {
+  // 等所有 PTY 真的死掉才 resolve（並行送訊號，整體最久 = 單一 PTY 的 5s+2s）
+  async killAll() {
+    const tasks = [];
     for (const s of this.sessions.values()) {
       if (s.status === 'running' && s._pty) {
-        try { s._pty.kill('SIGTERM'); } catch {}
+        tasks.push(this.kill(s.id));
       }
     }
+    await Promise.all(tasks);
   }
 
   _toJson(s) {
