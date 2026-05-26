@@ -13,6 +13,12 @@ export default defineConfig(({ mode }) => {
     rootEnv.GOOGLE_CLIENT_ID ||
     '';
 
+  const backendPort = rootEnv.PORT || '3000';
+  // 後端綁 127.0.0.1（IPv4）— proxy target 也用 127.0.0.1 避免 Node 18+ DNS 優先解析
+  // 'localhost' 成 IPv6 ::1 導致 ECONNREFUSED → vite fallback 回 404
+  const proxyTarget = `http://127.0.0.1:${backendPort}`;
+  console.log(`[vite] API proxy /api/* → ${proxyTarget} (PORT from root .env: ${rootEnv.PORT ?? 'unset, using 3000'})`);
+
   return {
     plugins: [vue()],
     envDir: rootDir,
@@ -21,10 +27,20 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 5173,
+      strictPort: true,
       proxy: {
         '/api': {
-          target: `http://localhost:${rootEnv.PORT || 3000}`,
+          target: proxyTarget,
           changeOrigin: true,
+          configure(proxy) {
+            proxy.on('error', (err, req) => {
+              console.error(
+                `[vite-proxy] FAIL ${req.method} ${req.url} → ${proxyTarget} :`,
+                `${err.code} ${err.message}`,
+                '\n→ 後端可能沒跑 (npm start) 或 PORT 不一致；root .env PORT=' + (rootEnv.PORT ?? 'unset')
+              );
+            });
+          },
         },
       },
     },
