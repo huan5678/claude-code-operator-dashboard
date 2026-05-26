@@ -2,9 +2,12 @@
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter, RouterLink } from 'vue-router';
 import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { api } from '../api.js';
+
+// 與 server PTY 對齊（apps/server/src/services/terminal-manager.js: cols 120, rows 30）
+const TERM_COLS = 120;
+const TERM_ROWS = 30;
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -14,10 +17,8 @@ const streamStatus = ref('connecting');  // connecting / live / reconnecting / c
 const termEl = ref(null);
 
 let term = null;
-let fitAddon = null;
 let es = null;
 let metaTimer = null;
-let resizeObs = null;
 
 async function loadMeta() {
   try {
@@ -84,8 +85,14 @@ async function openDesktop() {
 }
 
 onMounted(async () => {
-  // 1) 建立 xterm
+  // 1) 先 loadMeta，讓 v-if="session" 為真，termEl 才會渲染出來
+  await loadMeta();
+  metaTimer = setInterval(loadMeta, 3000);
+
+  // 2) 建立 xterm（固定 cols/rows 與 server PTY 對齊，不用 FitAddon）
   term = new Terminal({
+    cols: TERM_COLS,
+    rows: TERM_ROWS,
     cursorBlink: false,
     convertEol: false,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -97,23 +104,12 @@ onMounted(async () => {
     },
     scrollback: 5000,
   });
-  fitAddon = new FitAddon();
-  term.loadAddon(fitAddon);
+
+  // 3) 等 v-if 渲染出 .term-host 之後再 open
   await nextTick();
   if (termEl.value) {
     term.open(termEl.value);
-    fitAddon.fit();
   }
-
-  // 2) Meta polling（status / pid / restart_count 等變動慢，3 秒夠）
-  await loadMeta();
-  metaTimer = setInterval(loadMeta, 3000);
-
-  // 3) 視窗 resize → re-fit xterm
-  resizeObs = new ResizeObserver(() => {
-    try { fitAddon?.fit(); } catch {}
-  });
-  if (termEl.value) resizeObs.observe(termEl.value);
 
   // 4) 開 SSE
   startStream();
@@ -122,7 +118,6 @@ onMounted(async () => {
 onUnmounted(() => {
   if (metaTimer) clearInterval(metaTimer);
   if (es) es.close();
-  if (resizeObs) resizeObs.disconnect();
   if (term) term.dispose();
 });
 
@@ -164,10 +159,14 @@ watch(() => props.id, (newId, oldId) => {
   padding: 14px 16px;
   background: #000;
   border: 1px solid var(--line-bright);
+  /* 卡片包住 xterm 的內在尺寸即可，不再 stretch */
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
 }
 .term-host {
-  height: 600px;
-  width: 100%;
+  /* 讓 xterm 用自己的內在尺寸（cols × rows），避免容器拉伸造成排版錯位 */
+  display: inline-block;
 }
 .chip {
   background: transparent;
