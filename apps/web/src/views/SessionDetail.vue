@@ -37,8 +37,13 @@ function startStream() {
   es.addEventListener('data', (e) => {
     streamStatus.value = 'live';
     try {
-      const raw = atob(e.data);
-      term?.write(raw);
+      // atob 回傳 latin1 string（每個 char = 一個 byte 值）。
+      // 直接 term.write(string) 會把 byte 當成 codepoint，UTF-8 multi-byte 會變成
+      // â + 控制碼之類的亂碼。改成轉 Uint8Array 餵給 xterm，它會自己 decode UTF-8。
+      const bin = atob(e.data);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      term?.write(bytes);
     } catch {}
   });
 

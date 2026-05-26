@@ -48,9 +48,11 @@ export function sessionsRouter(terminal) {
     req.socket?.setKeepAlive(true);
     req.socket?.setNoDelay(true);
 
-    function sendData(raw) {
-      // base64 encode 避免 PTY raw bytes 內的 \n \r 破壞 SSE 行格式
-      const b64 = Buffer.from(raw, 'binary').toString('base64');
+    function sendData(buf) {
+      // buf 是來自 PTY 的 raw Buffer（terminal-manager spawn 用 encoding: null）
+      // 直接 base64 不經 string 解碼，避免 multi-byte UTF-8 被截掉低 byte
+      // base64 encode 同時避免 SSE 對 \n \r 行格式敏感
+      const b64 = buf.toString('base64');
       res.write(`event: data\ndata: ${b64}\n\n`);
     }
 

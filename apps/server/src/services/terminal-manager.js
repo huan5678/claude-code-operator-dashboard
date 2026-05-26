@@ -71,11 +71,14 @@ export class TerminalManager {
     return s ? this._toJson(s) : null;
   }
 
+  // 給 JSON /log API 用：取最後 N 個 chunk、concat 後 decode 成 utf8 string
+  // 注意：lines 參數是「最近 N 個 PTY chunk」，不是真正的「行數」（歷史遺留命名）
   logTail(id, lines = 200) {
     const s = this.sessions.get(id);
     if (!s) return null;
-    const buf = s.output_ring;
-    return buf.slice(Math.max(0, buf.length - lines)).join('');
+    const ring = s.output_ring;
+    const tail = ring.slice(Math.max(0, ring.length - lines));
+    return Buffer.concat(tail).toString('utf8');
   }
 
   async spawn({ profile_id }) {
@@ -109,10 +112,13 @@ export class TerminalManager {
       TERM: 'xterm-256color',
     };
 
+    // encoding: null → onData 回 Buffer，整條路（log / ring / SSE base64）
+    // 都不做 string 解碼，避免 multi-byte UTF-8（box drawing、emoji、ellipsis 等）
+    // 被截 byte。xterm.js 端自己會做 UTF-8 + ANSI escape 的跨 chunk 拼接。
     const ptyProcess = pty.spawn(
       this.shell,
       ['-i', '-c', profile.command],
-      { name: 'xterm-256color', cols: 120, rows: 30, cwd, env }
+      { name: 'xterm-256color', cols: 120, rows: 30, cwd, env, encoding: null }
     );
 
     const emitter = new EventEmitter();
@@ -143,13 +149,14 @@ export class TerminalManager {
       _killing: false,
     };
 
-    ptyProcess.onData(data => {
-      logStream.write(data);
-      record.output_ring.push(data);
+    ptyProcess.onData(chunk => {
+      // chunk 此處保證是 Buffer（spawn 時 encoding: null）
+      logStream.write(chunk);
+      record.output_ring.push(chunk);
       if (record.output_ring.length > RING_MAX) {
         record.output_ring.splice(0, record.output_ring.length - RING_MAX);
       }
-      emitter.emit('data', data);
+      emitter.emit('data', chunk);
     });
 
     ptyProcess.onExit(({ exitCode, signal }) => {
@@ -218,12 +225,11 @@ export class TerminalManager {
     };
   }
 
-  // 取得 ring buffer 內全部累積內容（catch-up 用）
-  // 與 logTail(id, n) 不同：這個拿全部 ring，不限 n 行
+  // SSE catch-up 用：拿全部 ring 內容，回 Buffer 直接 base64 不解碼
   logFull(id) {
     const s = this.sessions.get(id);
     if (!s) return null;
-    return s.output_ring.join('');
+    return Buffer.concat(s.output_ring);
   }
 
   // 等所有 PTY 真的死掉才 resolve（並行送訊號，整體最久 = 單一 PTY 的 5s+2s）
