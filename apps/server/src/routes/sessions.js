@@ -1,4 +1,10 @@
 import { Router } from 'express';
+import { execFile } from 'node:child_process';
+
+// AppleScript 字串內的 " 要轉成 \" ，\ 要轉成 \\
+function escapeAS(s) {
+  return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
 
 export function sessionsRouter(terminal) {
   const router = Router();
@@ -18,6 +24,58 @@ export function sessionsRouter(terminal) {
     res.json({ log: text });
   });
 
+  // SSE stream — 持續推 PTY raw bytes 給 xterm.js
+  // 流程：1) 先 flush ring buffer 內容做 catch-up
+  //       2) subscribe 後續 data + exit
+  //       3) 30s ping keep-alive（防 Cloudflare idle timeout）
+  //       4) req close → unsubscribe + clearInterval
+  router.get('/:id/stream', (req, res) => {
+    const id = req.params.id;
+    const session = terminal.get(id);
+    if (!session) return res.status(404).json({ error: 'not found' });
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // 防 nginx / proxy buffer
+    res.flushHeaders?.();
+
+    function sendData(raw) {
+      // base64 encode 避免 PTY raw bytes 內的 \n \r 破壞 SSE 行格式
+      const b64 = Buffer.from(raw, 'binary').toString('base64');
+      res.write(`event: data\ndata: ${b64}\n\n`);
+    }
+
+    function sendExit(payload) {
+      res.write(`event: exit\ndata: ${JSON.stringify(payload)}\n\n`);
+    }
+
+    // 1) catch-up：先把 ring buffer 既有內容推給 client
+    const catchUp = terminal.logFull(id);
+    if (catchUp) sendData(catchUp);
+
+    // 2) subscribe live stream
+    const unsubscribe = terminal.subscribe(id, {
+      onData: sendData,
+      onExit: (payload) => {
+        sendExit(payload);
+        // 給 client 一秒 read exit 後再 close
+        setTimeout(() => res.end(), 1000);
+      },
+    });
+
+    // 3) keep-alive ping
+    const pingInterval = setInterval(() => {
+      res.write(': ping\n\n');
+    }, 30000);
+
+    // 4) cleanup
+    req.on('close', () => {
+      clearInterval(pingInterval);
+      unsubscribe?.();
+    });
+  });
+
   router.post('/', async (req, res, next) => {
     try {
       const profile_id = Number(req.body?.profile_id);
@@ -32,6 +90,28 @@ export function sessionsRouter(terminal) {
     const s = await terminal.kill(req.params.id);
     if (!s) return res.status(404).json({ error: 'not found' });
     res.json(s);
+  });
+
+  // 在 macOS 桌面另開一個 Terminal.app 視窗跑同樣的 command（獨立進程，不關聯既有 PTY）
+  router.post('/:id/open-desktop', (req, res) => {
+    if (process.platform !== 'darwin') {
+      return res.status(400).json({ error: 'desktop terminal only supported on macOS' });
+    }
+    const s = terminal.get(req.params.id);
+    if (!s) return res.status(404).json({ error: 'not found' });
+
+    const script = `tell application "Terminal"
+  activate
+  do script "cd \\"${escapeAS(s.cwd)}\\" && ${escapeAS(s.command)}"
+end tell`;
+
+    execFile('osascript', ['-e', script], { timeout: 5000 }, (err) => {
+      if (err) {
+        console.error('[open-desktop] osascript failed:', err.message);
+      }
+    });
+    // fire-and-forget：不等 osascript 完成
+    res.json({ ok: true });
   });
 
   router.post('/:id/restart', async (req, res, next) => {

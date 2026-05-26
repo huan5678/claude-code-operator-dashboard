@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createWriteStream, mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { EventEmitter } from 'node:events';
 
 const RING_MAX = 2000;
 
@@ -104,6 +105,9 @@ export class TerminalManager {
       { name: 'xterm-256color', cols: 120, rows: 30, cwd, env }
     );
 
+    const emitter = new EventEmitter();
+    emitter.setMaxListeners(50); // 允許多個 SSE client 同時訂閱
+
     const record = {
       id,
       profile_id: profile.id,
@@ -120,6 +124,7 @@ export class TerminalManager {
       output_ring: [],
       _pty: ptyProcess,
       _logStream: logStream,
+      _emitter: emitter,
     };
 
     ptyProcess.onData(data => {
@@ -128,6 +133,7 @@ export class TerminalManager {
       if (record.output_ring.length > RING_MAX) {
         record.output_ring.splice(0, record.output_ring.length - RING_MAX);
       }
+      emitter.emit('data', data);
     });
 
     ptyProcess.onExit(({ exitCode, signal }) => {
@@ -136,6 +142,7 @@ export class TerminalManager {
       record.exit_code = signal ? `signal:${signal}` : exitCode;
       record._pty = null;
       try { logStream.end(); } catch {}
+      emitter.emit('exit', { exitCode, signal });
     });
 
     this.sessions.set(id, record);
@@ -164,6 +171,28 @@ export class TerminalManager {
     const freshRec = this.sessions.get(fresh.id);
     freshRec.restart_count = (s.restart_count || 0) + 1;
     return this._toJson(freshRec);
+  }
+
+  // SSE / WebSocket 用：訂閱 PTY data + exit 事件。回傳 unsubscribe 函式。
+  // 若 session 不存在回傳 null（caller 應該回 404）。
+  // 若 session 已 exited，仍可訂閱（但只會收到 exit 事件，不會有 data） — caller 通常先 flush ring buffer 已足夠。
+  subscribe(id, { onData, onExit }) {
+    const s = this.sessions.get(id);
+    if (!s) return null;
+    if (onData) s._emitter.on('data', onData);
+    if (onExit) s._emitter.on('exit', onExit);
+    return () => {
+      if (onData) s._emitter.off('data', onData);
+      if (onExit) s._emitter.off('exit', onExit);
+    };
+  }
+
+  // 取得 ring buffer 內全部累積內容（catch-up 用）
+  // 與 logTail(id, n) 不同：這個拿全部 ring，不限 n 行
+  logFull(id) {
+    const s = this.sessions.get(id);
+    if (!s) return null;
+    return s.output_ring.join('');
   }
 
   killAll() {

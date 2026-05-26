@@ -59,6 +59,7 @@ export const api = {
   spawnSession: (profile_id) => request('/terminal/sessions', { method: 'POST', body: JSON.stringify({ profile_id }) }),
   killSession: (id) => request(`/terminal/sessions/${id}`, { method: 'DELETE' }),
   restartSession: (id) => request(`/terminal/sessions/${id}/restart`, { method: 'POST' }),
+  openSessionDesktop: (id) => request(`/terminal/sessions/${id}/open-desktop`, { method: 'POST' }),
 
   // identity
   listIdentity: () => request('/identity'),
