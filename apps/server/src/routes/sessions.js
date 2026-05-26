@@ -86,6 +86,25 @@ export function sessionsRouter(terminal) {
     });
   });
 
+  // 寫 stdin 進指定 session 的 PTY。body: { data: base64string }
+  // 走 base64 是為了讓 control byte / ANSI escape / 任意 binary 都能無損傳遞，
+  // 跟 SSE 出口的 base64 對稱（兩邊 transport 都是 raw bytes）。
+  router.post('/:id/input', (req, res) => {
+    const b64 = req.body?.data;
+    if (typeof b64 !== 'string') {
+      return res.status(400).json({ error: 'data (base64 string) required' });
+    }
+    let buf;
+    try { buf = Buffer.from(b64, 'base64'); }
+    catch { return res.status(400).json({ error: 'invalid base64' }); }
+    if (buf.length === 0) return res.status(204).end();
+
+    const result = terminal.write(req.params.id, buf);
+    if (result === null) return res.status(404).json({ error: 'not found' });
+    if (result === false) return res.status(409).json({ error: 'session not running' });
+    res.status(204).end();
+  });
+
   router.post('/', async (req, res, next) => {
     try {
       const profile_id = Number(req.body?.profile_id);

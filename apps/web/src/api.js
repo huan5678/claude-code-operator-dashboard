@@ -60,6 +60,10 @@ export const api = {
   killSession: (id) => request(`/terminal/sessions/${id}`, { method: 'DELETE' }),
   restartSession: (id) => request(`/terminal/sessions/${id}/restart`, { method: 'POST' }),
   openSessionDesktop: (id) => request(`/terminal/sessions/${id}/open-desktop`, { method: 'POST' }),
+  sendSessionInput: (id, base64) => request(`/terminal/sessions/${id}/input`, {
+    method: 'POST',
+    body: JSON.stringify({ data: base64 }),
+  }),
 
   // identity
   listIdentity: () => request('/identity'),

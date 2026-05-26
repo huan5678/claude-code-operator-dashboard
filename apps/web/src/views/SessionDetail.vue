@@ -20,6 +20,37 @@ let term = null;
 let es = null;
 let metaTimer = null;
 
+// 輸入緩衝：xterm.onData 每按一鍵 fire 一次，10ms debounce 合併同 tick 的 keystroke
+// 避免太多小 POST，又不會讓人感覺到延遲
+const INPUT_DEBOUNCE_MS = 10;
+let inputBuffer = '';
+let inputFlushTimer = null;
+const textEncoder = new TextEncoder();
+
+function bytesToBase64(bytes) {
+  // Uint8Array → latin1 string → btoa
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+function flushInput() {
+  inputFlushTimer = null;
+  if (!inputBuffer) return;
+  const bytes = textEncoder.encode(inputBuffer);
+  inputBuffer = '';
+  const b64 = bytesToBase64(bytes);
+  api.sendSessionInput(props.id, b64).catch((e) => {
+    // session 已 exit / 網路問題：靜默；用戶可從 stream 狀態看出 session 死了
+    console.warn('[input] send failed:', e.message);
+  });
+}
+
+function scheduleInputFlush() {
+  if (inputFlushTimer) return;
+  inputFlushTimer = setTimeout(flushInput, INPUT_DEBOUNCE_MS);
+}
+
 async function loadMeta() {
   try {
     session.value = await api.getSession(props.id);
@@ -110,10 +141,17 @@ onMounted(async () => {
     scrollback: 5000,
   });
 
-  // 3) 等 v-if 渲染出 .term-host 之後再 open
+  // 3) 等 v-if 渲染出 .term-host 之後再 open；同時 hook keyboard input
   await nextTick();
   if (termEl.value) {
     term.open(termEl.value);
+    term.focus();
+    // xterm 把所有按鍵（含 arrow keys / Ctrl-C / Tab / IME 中文）對成正確的
+    // byte sequence 給 onData，直接 buffer + debounce 送到 server PTY stdin
+    term.onData((s) => {
+      inputBuffer += s;
+      scheduleInputFlush();
+    });
   }
 
   // 4) 開 SSE
@@ -122,6 +160,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (metaTimer) clearInterval(metaTimer);
+  if (inputFlushTimer) { clearTimeout(inputFlushTimer); inputFlushTimer = null; }
+  inputBuffer = '';
   if (es) es.close();
   if (term) term.dispose();
 });

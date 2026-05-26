@@ -71,6 +71,16 @@ export class TerminalManager {
     return s ? this._toJson(s) : null;
   }
 
+  // 寫 bytes 進 PTY stdin（給 /input route 用）
+  // 回傳：null = session 不存在；false = session 已結束；true = 成功 write
+  write(id, bytes) {
+    const s = this.sessions.get(id);
+    if (!s) return null;
+    if (s.status !== 'running' || !s._pty) return false;
+    s._pty.write(bytes);
+    return true;
+  }
+
   // 給 JSON /log API 用：取最後 N 個 chunk、concat 後 decode 成 utf8 string
   // 注意：lines 參數是「最近 N 個 PTY chunk」，不是真正的「行數」（歷史遺留命名）
   logTail(id, lines = 200) {
