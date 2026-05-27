@@ -62,9 +62,11 @@ app.use((req, res, next) => {
     'Content-Security-Policy',
     [
       "default-src 'self'",
-      "script-src 'self' https://accounts.google.com",
+      // cloudflareinsights：Cloudflare 對所有 zone 強制注入的 Web Analytics beacon；
+      // 免費方案無法從 dashboard 完全停用，直接在 CSP 放行避免 console 噪音
+      "script-src 'self' https://accounts.google.com https://static.cloudflareinsights.com",
       "frame-src https://accounts.google.com",
-      "connect-src 'self' https://accounts.google.com",
+      "connect-src 'self' https://accounts.google.com https://cloudflareinsights.com",
       "img-src 'self' data:",
       "style-src 'self' 'unsafe-inline' https://accounts.google.com https://fonts.googleapis.com",
       "font-src 'self' data: https://fonts.gstatic.com",
