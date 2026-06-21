@@ -3,17 +3,14 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import { api } from '../api.js';
 
 const items = ref([]);
-const available = ref(false);
 let timer = null;
 
 async function poll() {
   try {
     const data = await api.getStatus();
     items.value = data.items || [];
-    available.value = data.available;
   } catch {
     items.value = [];
-    available.value = false;
   }
 }
 
@@ -21,24 +18,31 @@ onMounted(() => { poll(); timer = setInterval(poll, 30000); });
 onUnmounted(() => { if (timer) clearInterval(timer); });
 
 function lampClass(item) {
-  if (!item || item.stale) return 'lamp-red';
-  const idle = item.idle_seconds ?? 0;
+  if (!item || item.status !== 'running') return 'lamp-dim';
+  if (item.stale) return 'lamp-red';
+  // 沒有 hook 心跳資料時，只知道 process 活著 → 綠燈
+  if (item.idle_seconds == null) return 'lamp-green';
+  const idle = item.idle_seconds;
   if (idle < 300) return 'lamp-green';
   if (idle < 900) return 'lamp-amber';
   return 'lamp-red';
 }
 
-function idleStr(item) {
-  const s = item.idle_seconds ?? 0;
+function fmtSecs(s) {
+  if (s == null) return '—';
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   if (h > 0) return `${h}h${String(m).padStart(2, '0')}m`;
   return `${m}m${String(s % 60).padStart(2, '0')}s`;
 }
 
-function shortId(id) {
-  if (!id) return '—';
-  return id.length > 8 ? id.slice(0, 8) : id;
+// 主時間顯示 runtime；有 hook idle 時用 idle（更能反映 agent 是否在動）
+function timeStr(item) {
+  return fmtSecs(item.idle_seconds ?? item.runtime_seconds);
+}
+
+function label(item) {
+  return item.profile_name || (item.session_id ? item.session_id.slice(0, 8) : '—');
 }
 </script>
 
@@ -54,8 +58,8 @@ function shortId(id) {
     </div>
     <div v-for="item in items" :key="item.session_id" class="row">
       <span :class="['lamp', lampClass(item)]">●</span>
-      <span class="sid">{{ shortId(item.session_id) }}</span>
-      <span class="idle">{{ idleStr(item) }}</span>
+      <span class="sid">{{ label(item) }}</span>
+      <span class="idle">{{ timeStr(item) }}</span>
       <span class="tool">{{ item.last_tool || '—' }}</span>
     </div>
   </div>

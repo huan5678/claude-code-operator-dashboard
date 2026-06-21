@@ -26,6 +26,8 @@ export const api = {
   getSkillSchema: () => request('/skills/_schema'),
   getSkill: (slug) => request(`/skills/${slug}`),
   saveSkill: (slug, body) => request(`/skills/${slug}`, { method: 'PUT', body: JSON.stringify(body) }),
+  listSkillFiles: (slug) => request(`/skills/${slug}/files`),
+  getSkillFile: (slug, path) => request(`/skills/${slug}/file?path=${encodeURIComponent(path)}`),
 
   // agents
   listAgents: () => request('/agents'),
@@ -57,7 +59,8 @@ export const api = {
   getSession: (id) => request(`/terminal/sessions/${id}`),
   getSessionLog: (id, tail = 200) => request(`/terminal/sessions/${id}/log?tail=${tail}`),
   spawnSession: (profile_id) => request('/terminal/sessions', { method: 'POST', body: JSON.stringify({ profile_id }) }),
-  killSession: (id) => request(`/terminal/sessions/${id}`, { method: 'DELETE' }),
+  killSession: (id) => request(`/terminal/sessions/${id}/kill`, { method: 'POST' }),
+  removeSession: (id) => request(`/terminal/sessions/${id}`, { method: 'DELETE' }),
   restartSession: (id) => request(`/terminal/sessions/${id}/restart`, { method: 'POST' }),
   openSessionDesktop: (id) => request(`/terminal/sessions/${id}/open-desktop`, { method: 'POST' }),
   sendSessionInput: (id, base64) => request(`/terminal/sessions/${id}/input`, {

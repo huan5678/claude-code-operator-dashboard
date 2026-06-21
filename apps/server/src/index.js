@@ -89,7 +89,7 @@ app.use('/api/tasks', protect, tasksRouter(reader));
 app.use('/api/memory', protect, memoryRouter(reader));
 app.use('/api/kanban', protect, kanbanRouter(repo));
 app.use('/api/identity', protect, identityRouter(reader));
-app.use('/api/status', protect, statusRouter());
+app.use('/api/status', protect, statusRouter(terminal));
 app.use('/api/launch-profiles', protect, launchProfilesRouter(profileRepo));
 app.use('/api/terminal/sessions', protect, sessionsRouter(terminal));
 

@@ -115,8 +115,16 @@ export function sessionsRouter(terminal) {
     }
   });
 
-  router.delete('/:id', async (req, res) => {
+  // KILL：終止 process（status→exited），session 仍留在列表
+  router.post('/:id/kill', async (req, res) => {
     const s = await terminal.kill(req.params.id);
+    if (!s) return res.status(404).json({ error: 'not found' });
+    res.json(s);
+  });
+
+  // DELETE：soft-delete，從預設列表移除（filter 可顯示）。若還在跑會先 kill。
+  router.delete('/:id', async (req, res) => {
+    const s = await terminal.remove(req.params.id);
     if (!s) return res.status(404).json({ error: 'not found' });
     res.json(s);
   });

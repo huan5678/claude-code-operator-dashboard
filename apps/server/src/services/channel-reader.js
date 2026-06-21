@@ -1,7 +1,17 @@
 import { readdir, readFile, writeFile, stat, rename } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, resolve, basename, dirname } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { join, resolve, basename, dirname, relative, sep } from 'node:path';
 import matter from 'gray-matter';
+
+// 單檔預覽上限：超過就只回 metadata 不回內容，避免把大檔（embedding json、log）整包丟前端
+const SKILL_FILE_MAX_BYTES = 512 * 1024;
+
+// 掃前 8KB 有 NUL byte 就當 binary（圖片 / 編譯產物），前端不嘗試 render
+function looksBinary(buf) {
+  const n = Math.min(buf.length, 8000);
+  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
+  return false;
+}
 
 export const IDENTITY_FILES = [
   'CLAUDE.md',
@@ -88,6 +98,86 @@ export class ChannelReader {
     if (!existsSync(file)) throw new Error(`skill not found: ${slug}`);
     await this._safeWrite(file, frontmatter, body, expectedMtime);
     return this.getSkill(slug);
+  }
+
+  // 列出 skill 目錄底下的完整檔案樹（含 reference/ 等子目錄）。
+  // 回傳 flat 陣列（dir + file），依 path 排序，前端自行縮排成樹。
+  // skill 不存在回 null（caller 應回 404）。
+  async listSkillFiles(slug) {
+    assertSafeSlug(slug);
+    const base = join(this._skillsDir(), slug);
+    if (!existsSync(base)) return null;
+    const out = [];
+    await this._walkSkillDir(base, base, out, 0);
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  async _walkSkillDir(base, dir, out, depth) {
+    if (depth > 8) return; // 防呆：避免極端巢狀 / symlink 迴圈
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch { return; }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue; // 跳過 dotfile / .tmp
+      const full = join(dir, entry.name);
+      const rel = relative(base, full);
+      if (entry.isDirectory()) {
+        out.push({ path: rel, type: 'dir' });
+        await this._walkSkillDir(base, full, out, depth + 1);
+      } else if (entry.isFile()) {
+        let st;
+        try { st = await stat(full); } catch { continue; }
+        out.push({ path: rel, type: 'file', size: st.size, mtime: st.mtimeMs });
+      }
+    }
+  }
+
+  // 讀 skill 目錄下單一檔案（相對路徑）。含 path-traversal 防護：
+  // resolve 後必須仍落在 skill 目錄內，否則拋 400。
+  // binary / 過大檔只回 metadata 不回內容。檔案不存在回 null。
+  async getSkillFile(slug, relPath) {
+    assertSafeSlug(slug);
+    if (typeof relPath !== 'string' || !relPath) {
+      const err = new Error('path required');
+      err.status = 400; err.code = 'INVALID_PATH';
+      throw err;
+    }
+    const base = resolve(this._skillsDir(), slug);
+    const target = resolve(base, relPath);
+    if (target !== base && !target.startsWith(base + sep)) {
+      const err = new Error('path escapes skill directory');
+      err.status = 400; err.code = 'INVALID_PATH';
+      throw err;
+    }
+    if (!existsSync(target)) return null;
+    // resolve() 只做字串運算、不解 symlink。再用 realpath 解出真實路徑，
+    // 擋掉 skill 目錄內的 symlink 逃逸（如 evil -> /etc 後讀 evil/passwd）。
+    let realBase, realTarget;
+    try {
+      realBase = realpathSync(base);
+      realTarget = realpathSync(target);
+    } catch { return null; }
+    if (realTarget !== realBase && !realTarget.startsWith(realBase + sep)) {
+      const err = new Error('path escapes skill directory');
+      err.status = 400; err.code = 'INVALID_PATH';
+      throw err;
+    }
+    const st = await stat(target);
+    if (!st.isFile()) return null;
+    const meta = { path: relPath, size: st.size, mtime: st.mtimeMs };
+    if (st.size > SKILL_FILE_MAX_BYTES) {
+      // 過大不讀內容 → 無法判定是否 binary，用 null 表「未知」
+      return { ...meta, binary: null, tooLarge: true, content: '' };
+    }
+    const buf = await readFile(target);
+    const binary = looksBinary(buf);
+    return {
+      ...meta,
+      binary,
+      tooLarge: false,
+      content: binary ? '' : buf.toString('utf8'),
+    };
   }
 
   async listAgents() {

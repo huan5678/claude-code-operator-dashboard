@@ -150,6 +150,7 @@ export class TerminalManager {
       exited_at: null,
       exit_code: null,
       restart_count: 0,
+      removed: false,
       log_path: logPath,
       output_ring: [],
       _pty: ptyProcess,
@@ -209,6 +210,16 @@ export class TerminalManager {
     let to;
     const timer = new Promise(r => { to = setTimeout(r, ms); });
     return Promise.race([s._exitPromise, timer]).finally(() => clearTimeout(to));
+  }
+
+  // soft-delete：從預設列表移除（保留在 Map 供 filter 顯示）。
+  // 若還在跑就先 kill 乾淨，避免出現「隱藏但仍在跑」的殭屍 session。
+  async remove(id) {
+    const s = this.sessions.get(id);
+    if (!s) return null;
+    if (s.status === 'running') await this.kill(id);
+    s.removed = true;
+    return this._toJson(s);
   }
 
   async restart(id) {
