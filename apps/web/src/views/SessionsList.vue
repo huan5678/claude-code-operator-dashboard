@@ -1,14 +1,16 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue';
-import { RouterLink } from 'vue-router';
+import { useRouter } from 'vue-router';
 import { api } from '../api.js';
 
+const router = useRouter();
 const sessions = ref([]);
 const profiles = ref([]);
 const selectedProfileId = ref(null);
 const loading = ref(true);
 const spawning = ref(false);
 const error = ref(null);
+const showRemoved = ref(false);
 
 async function load() {
   loading.value = true;
@@ -18,6 +20,16 @@ async function load() {
     profiles.value = p.items;
     if (!selectedProfileId.value && p.items.length) selectedProfileId.value = p.items[0].id;
   } finally { loading.value = false; }
+}
+
+// 預設隱藏已移除的 session，showRemoved 打開才顯示
+const visibleSessions = computed(() =>
+  showRemoved.value ? sessions.value : sessions.value.filter(s => !s.removed)
+);
+const removedCount = computed(() => sessions.value.filter(s => s.removed).length);
+
+function enter(id) {
+  router.push(`/sessions/${id}`);
 }
 
 async function spawn() {
@@ -42,15 +54,22 @@ async function restart(id) {
   await load();
 }
 
+async function remove(id) {
+  if (!confirm('Remove this session from the list? (執行中會先 kill)')) return;
+  await api.removeSession(id);
+  await load();
+}
+
 onMounted(load);
 
 const indexLabel = computed(() => {
   if (loading.value) return '';
-  const running = sessions.value.filter(s => s.status === 'running').length;
-  return `INDEX · ${sessions.value.length} sessions · ${running} running`;
+  const running = visibleSessions.value.filter(s => s.status === 'running').length;
+  return `INDEX · ${visibleSessions.value.length} sessions · ${running} running`;
 });
 
 function runtime(s) {
+  if (!s.started_at) return '—';
   const start = Date.parse(s.started_at);
   const end = s.exited_at ? Date.parse(s.exited_at) : Date.now();
   const secs = Math.floor((end - start) / 1000);
@@ -65,6 +84,10 @@ function runtime(s) {
   <div class="toolbar">
     <h2 style="margin: 0">SESSIONS</h2>
     <span class="spacer" />
+    <label class="filter" title="顯示已移除的 session">
+      <input type="checkbox" v-model="showRemoved" />
+      show removed<span v-if="removedCount" class="notice"> ({{ removedCount }})</span>
+    </label>
     <select v-model="selectedProfileId" style="margin-right: 8px">
       <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option>
     </select>
@@ -76,20 +99,31 @@ function runtime(s) {
 
   <p v-if="loading" class="notice">// loading …</p>
   <p v-else-if="!sessions.length" class="notice">// no sessions — click + NEW to spawn</p>
+  <p v-else-if="!visibleSessions.length" class="notice">// all sessions removed — 勾選 show removed 以顯示</p>
   <div v-else>
-    <div v-for="s in sessions" :key="s.id" class="list-item">
+    <div
+      v-for="s in visibleSessions"
+      :key="s.id"
+      class="list-item clickable"
+      :class="{ removed: s.removed }"
+      role="button"
+      tabindex="0"
+      @click="enter(s.id)"
+      @keydown.enter="enter(s.id)"
+      @keydown.space.prevent="enter(s.id)"
+    >
       <div class="row">
-        <RouterLink :to="`/sessions/${s.id}`" class="link">
-          <strong>{{ s.profile_name }}</strong>
-          <span class="notice">·  {{ s.id.slice(0, 8) }}</span>
-        </RouterLink>
+        <strong>{{ s.profile_name }}</strong>
+        <span class="notice">·  {{ s.id.slice(0, 8) }}</span>
         <span :class="['chip', s.status === 'running' ? 'primary' : 'dim']">{{ s.status }}</span>
+        <span v-if="s.removed" class="chip dim">removed</span>
         <span class="chip">pid: {{ s.pid }}</span>
         <span class="chip">run: {{ runtime(s) }}</span>
         <span v-if="s.restart_count" class="chip">restarts: {{ s.restart_count }}</span>
         <span class="spacer" />
-        <button v-if="s.status === 'running'" @click="kill(s.id)" class="danger">KILL</button>
-        <button @click="restart(s.id)">RESTART</button>
+        <button v-if="s.status === 'running'" @click.stop="kill(s.id)" class="danger">KILL</button>
+        <button @click.stop="restart(s.id)">RESTART</button>
+        <button v-if="!s.removed" @click.stop="remove(s.id)" class="danger">REMOVE</button>
       </div>
       <div class="meta">→ <code>{{ s.command }}</code></div>
     </div>
@@ -98,8 +132,21 @@ function runtime(s) {
 
 <style scoped>
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.link { color: inherit; text-decoration: none; border-bottom: none; flex-shrink: 0; }
-.link:hover strong { color: var(--amber); }
+.clickable { cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+.clickable:hover { border-color: var(--amber); background: var(--bg-soft); }
+.clickable:hover strong { color: var(--amber); }
+.removed { opacity: 0.55; }
+.filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 12px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  text-transform: lowercase;
+  cursor: pointer;
+}
 .chip {
   background: transparent;
   border: 1px solid var(--line-bright);

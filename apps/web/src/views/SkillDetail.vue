@@ -3,6 +3,7 @@ import { ref, onMounted, useTemplateRef } from 'vue';
 import { RouterLink } from 'vue-router';
 import { api } from '../api.js';
 import SkillEditor from '../components/SkillEditor.vue';
+import SkillFiles from '../components/SkillFiles.vue';
 
 const props = defineProps({ slug: { type: String, required: true } });
 const resource = ref(null);
@@ -40,4 +41,5 @@ async function save(payload) {
   </p>
   <p v-if="error" class="error">{{ error }}</p>
   <SkillEditor v-if="resource" ref="editor" :resource="resource" @save="save" />
+  <SkillFiles v-if="resource" :slug="resource.slug" />
 </template>

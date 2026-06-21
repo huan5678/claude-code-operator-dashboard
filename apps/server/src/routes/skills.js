@@ -14,6 +14,30 @@ export function skillsRouter(reader) {
     res.json(getSkillSchema());
   });
 
+  // 列出 skill 目錄樹（含 reference/ 等子目錄）
+  router.get('/:slug/files', async (req, res, next) => {
+    try {
+      const files = await reader.listSkillFiles(req.params.slug);
+      if (files === null) return res.status(404).json({ error: 'not found' });
+      res.json({ items: files });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      next(e);
+    }
+  });
+
+  // 讀 skill 目錄下單一檔案：?path=reference/foo.md
+  router.get('/:slug/file', async (req, res, next) => {
+    try {
+      const file = await reader.getSkillFile(req.params.slug, req.query.path);
+      if (file === null) return res.status(404).json({ error: 'not found' });
+      res.json(file);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      next(e);
+    }
+  });
+
   router.get('/:slug', async (req, res, next) => {
     try {
       const skill = await reader.getSkill(req.params.slug);
