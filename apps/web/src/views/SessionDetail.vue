@@ -126,13 +126,17 @@ onMounted(async () => {
   metaTimer = setInterval(loadMeta, 3000);
 
   // 2) 建立 xterm（固定 cols/rows 與 server PTY 對齊，不用 FitAddon）
+  //    Server PTY 不支援 resize（terminal-manager 固定 cols 120 / rows 30，也沒有
+  //    resize route），所以 cols/rows 必須保持固定，否則畫面會錯位。
+  //    手機上改用較小 fontSize，讓固定的 120 cols 在 overflow-x:auto 容器裡更好讀。
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
   term = new Terminal({
     cols: TERM_COLS,
     rows: TERM_ROWS,
     cursorBlink: false,
     convertEol: false,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    fontSize: 13,
+    fontSize: isMobile ? 10 : 13,
     theme: {
       background: '#000000',
       foreground: '#e8e6d8',

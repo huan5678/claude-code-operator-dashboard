@@ -128,4 +128,19 @@ const indexLabel = computed(() => {
   letter-spacing: 0.04em;
   text-shadow: 0 0 8px var(--amber-glow);
 }
+
+/* mirror SkillFiles.vue 的 responsive 收合：手機改單欄、rail 變橫向矮列 */
+@media (max-width: 768px) {
+  .memory-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .memory-rail {
+    border-right: none;
+    border-bottom: 1px dashed var(--line-bright);
+    padding-right: 0;
+    padding-bottom: 10px;
+    max-height: 200px;
+  }
+}
 </style>

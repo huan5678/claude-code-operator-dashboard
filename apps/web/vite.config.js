@@ -28,6 +28,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       strictPort: true,
+      allowedHosts: ['codd.shrhuan.ai'],
       proxy: {
         '/api': {
           target: proxyTarget,

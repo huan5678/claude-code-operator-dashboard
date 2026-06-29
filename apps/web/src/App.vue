@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { RouterLink, RouterView, useRoute } from 'vue-router';
 import { useAuthStore } from './stores/auth.js';
 import StatusPulse from './components/StatusPulse.vue';
@@ -7,6 +7,21 @@ import StatusPulse from './components/StatusPulse.vue';
 const route = useRoute();
 const auth = useAuthStore();
 const isLogin = computed(() => route.name === 'login');
+
+// 行動版側欄抽屜開關（桌機永遠展開，這個 state 只在 < 768px 生效）
+const navOpen = ref(false);
+function toggleNav() { navOpen.value = !navOpen.value; }
+function closeNav() { navOpen.value = false; }
+
+// 路由切換時自動關閉抽屜
+watch(() => route.fullPath, closeNav);
+
+// Esc 關閉抽屜
+function onKeydown(e) {
+  if (e.key === 'Escape') closeNav();
+}
+onMounted(() => { window.addEventListener('keydown', onKeydown); });
+onUnmounted(() => { window.removeEventListener('keydown', onKeydown); });
 
 const clock = ref('--:--:--');
 function tick() {
@@ -26,8 +41,20 @@ async function logout() {
   <div v-if="isLogin">
     <RouterView />
   </div>
-  <div v-else class="app-shell">
-    <aside class="sidebar">
+  <div v-else class="app-shell" :class="{ 'nav-open': navOpen }">
+    <header class="mobile-topbar">
+      <button
+        class="hamburger"
+        type="button"
+        :aria-expanded="navOpen"
+        aria-controls="sidebar-nav"
+        aria-label="切換導覽選單"
+        @click="toggleNav"
+      >≡ MENU</button>
+      <span class="topbar-title">FANCY/CODD</span>
+    </header>
+
+    <aside id="sidebar-nav" class="sidebar" :class="{ open: navOpen }">
       <h1>FANCY/CODD</h1>
       <p class="sub">// console v0.1</p>
       <div class="nav">
@@ -47,6 +74,9 @@ async function logout() {
         <button v-if="auth.user" @click="logout" style="margin-top: 10px; width: 100%">LOGOUT</button>
       </div>
     </aside>
+
+    <div v-if="navOpen" class="nav-backdrop" @click="closeNav" />
+
     <main class="main">
       <RouterView />
     </main>

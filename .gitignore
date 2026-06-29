@@ -14,6 +14,11 @@ apps/server/data/sessions/
 apps/web/dist/
 .vite/
 
+# Playwright e2e 測試輸出（截圖與報告每次跑都重生，不進版控）
+apps/web/test-results/
+apps/web/e2e/screenshots/
+playwright-report/
+
 .DS_Store
 *.log
 npm-debug.log*

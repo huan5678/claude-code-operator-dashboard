@@ -52,6 +52,7 @@ const authGate = new AuthGate({
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', 1);  // trust first proxy (Cloudflare Tunnel)
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
 

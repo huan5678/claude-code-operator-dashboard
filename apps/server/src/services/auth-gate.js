@@ -87,10 +87,13 @@ export class AuthGate {
   }
 
   setSessionCookie(res, token) {
+    // Cloudflare Tunnel / reverse-proxy: x-forwarded-proto=https → must set secure
+    const proto = res.req?.headers?.['x-forwarded-proto'];
+    const secure = this.isProd || proto === 'https';
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
-      secure: this.isProd,
-      sameSite: 'strict',
+      secure,
+      sameSite: secure ? 'none' : 'strict',
       maxAge: this.ttlSeconds * 1000,
       path: '/',
     });

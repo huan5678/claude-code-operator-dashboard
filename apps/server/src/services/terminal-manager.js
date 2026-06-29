@@ -81,6 +81,17 @@ export class TerminalManager {
     return true;
   }
 
+  // resize PTY（給 /resize route 用，讓前端 xterm FitAddon 算出的 cols/rows 同步到 PTY，
+  // 子程式才會收到 SIGWINCH、按正確寬度 wrap）
+  // 回傳：null = session 不存在；false = session 已結束 / resize 失敗；true = 成功
+  resize(id, cols, rows) {
+    const s = this.sessions.get(id);
+    if (!s) return null;
+    if (s.status !== 'running' || !s._pty) return false;
+    try { s._pty.resize(cols, rows); } catch { return false; }
+    return true;
+  }
+
   // 給 JSON /log API 用：取最後 N 個 chunk、concat 後 decode 成 utf8 string
   // 注意：lines 參數是「最近 N 個 PTY chunk」，不是真正的「行數」（歷史遺留命名）
   logTail(id, lines = 200) {
